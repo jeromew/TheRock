@@ -288,6 +288,7 @@ if(THEROCK_ENABLE_ROCPROFV3)
       SUBDIRS .
     )
 
+    therock_cmake_subproject_provide_package(rocprofiler-systems rocprofiler-systems lib/cmake/rocprofiler-systems)
     therock_cmake_subproject_activate(rocprofiler-systems)
 
     therock_provide_artifact(rocprofiler-systems
@@ -305,5 +306,42 @@ if(THEROCK_ENABLE_ROCPROFV3)
         rocprofiler-sdk
         rocprofiler-systems
       )
+
+      if (THEROCK_DIST_AMDGPU_TARGETS STREQUAL "THEROCK_DIST_AMDGPU_TARGETS-NOTFOUND")
+        set(_ROCPROFSYS_GFX_TARGETS_ESCAPED "")
+      else()
+        string(REPLACE ";" "\\;" _ROCPROFSYS_GFX_TARGETS_ESCAPED "${THEROCK_DIST_AMDGPU_TARGETS}")
+      endif()
+
+      therock_cmake_subproject_declare(rocprofiler-systems-examples
+        USE_DIST_AMDGPU_TARGETS
+        EXTERNAL_SOURCE_DIR "${THEROCK_ROCM_SYSTEMS_SOURCE_DIR}/projects/rocprofiler-systems/examples"
+        BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/rocprofiler-systems-examples"
+        BACKGROUND_BUILD
+        CMAKE_ARGS
+          -DHIP_PLATFORM=amd
+          -DROCPROFSYS_GFX_TARGETS="${_ROCPROFSYS_GFX_TARGETS_ESCAPED}"
+          -DROCPROFSYS_BUILD_FOR_THEROCK=ON
+        INSTALL_RPATH_DIRS
+          "lib"
+          "lib/rocprofiler-systems"
+          "llvm/lib"
+        RUNTIME_DEPS
+          rocprofiler-systems
+      )
+      therock_cmake_subproject_glob_c_sources(rocprofiler-systems-examples
+        SUBDIRS .
+      )
+      therock_cmake_subproject_activate(rocprofiler-systems-examples)
+
+      therock_provide_artifact(rocprofiler-systems-examples
+        DESCRIPTOR artifact-rocprofiler-systems-examples.toml
+        COMPONENTS
+          test
+        SUBPROJECT_DEPS
+          rocprofiler-systems
+          rocprofiler-systems-examples
+      )
+
   endif(THEROCK_ENABLE_ROCPROFSYS AND THEROCK_SANITIZER STREQUAL "")
 endif(THEROCK_ENABLE_ROCPROFV3)
