@@ -83,6 +83,18 @@ test_matrix = {
             "windows": 1,
         },
     },
+    "rocblas_multi_gpu": {
+        "job_name": "rocblas_multi_gpu",
+        "fetch_artifact_args": "--blas --tests",
+        "timeout_minutes": 15,
+        "test_script": f"python {_get_script_path('test_rocblas.py')} --multi_gpu",
+        "platform": ["linux"],
+        "total_shards_dict": {
+            "linux": 1,
+        },
+        # Architectures that we have multi GPU setup for testing
+        "multi_gpu": {"linux": ["gfx94X-dcgpu"]},
+    },
     "rocroller": {
         "job_name": "rocroller",
         "fetch_artifact_args": "--blas --tests",
@@ -281,6 +293,18 @@ test_matrix = {
             "windows": 1,
         },
     },
+    "rocfft_multi_gpu": {
+        "job_name": "rocfft_multi_gpu",
+        "fetch_artifact_args": "--fft --rand --tests",
+        "timeout_minutes": 60,
+        "test_script": f"python {_get_script_path('test_rocfft.py')} --multi_gpu",
+        "platform": ["linux"],
+        "total_shards_dict": {
+            "linux": 1,
+        },
+        # Architectures that we have multi GPU setup for testing
+        "multi_gpu": {"linux": ["gfx94X-dcgpu"]},
+    },
     "hipfft": {
         "job_name": "hipfft",
         "fetch_artifact_args": "--fft --rand --tests",
@@ -291,6 +315,18 @@ test_matrix = {
             "linux": 2,
             "windows": 2,
         },
+    },
+    "hipfft_multi_gpu": {
+        "job_name": "hipfft_multi_gpu",
+        "fetch_artifact_args": "--fft --rand --tests",
+        "timeout_minutes": 60,
+        "test_script": f"python {_get_script_path('test_hipfft.py')} --multi_gpu",
+        "platform": ["linux"],
+        "total_shards_dict": {
+            "linux": 1,
+        },
+        # Architectures that we have multi GPU setup for testing
+        "multi_gpu": {"linux": ["gfx94X-dcgpu"]},
     },
     # MIOpen tests
     "miopen": {
