@@ -40,7 +40,13 @@ def main():
     if is_asan():
         environ_vars["HSA_XNACK"] = "1"
 
+    test_type = os.getenv("TEST_TYPE", "full")
+
     if args.multi_gpu:
+        if test_type == "smoke":
+            logging.info("Skipping rocblas multi-GPU tests: smoke test mode")
+            return 0
+
         # Verify we have multiple GPUs available
         gpu_count = get_visible_gpu_count(
             env=environ_vars, therock_bin_dir=THEROCK_BIN_DIR
@@ -55,7 +61,6 @@ def main():
     else:
         # If smoke tests are enabled, we run smoke tests only.
         # Otherwise, we run the normal test suite
-        test_type = os.getenv("TEST_TYPE", "full")
         if test_type == "smoke":
             test_filter = ["--yaml", f"{THEROCK_BIN_DIR}/rocblas_smoke.yaml"]
         else:
