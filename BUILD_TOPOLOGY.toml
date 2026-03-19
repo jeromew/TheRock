@@ -237,7 +237,7 @@ source_sets = ["rocm-systems"]
 [artifact_groups.core-amdsmi]
 description = "AMD SMI tool (amdsmi)"
 type = "generic"
-artifact_group_deps = ["base", "third-party-sysdeps"]
+artifact_group_deps = ["base", "third-party-sysdeps", "compiler"]
 source_sets = ["rocm-systems"]
 
 [artifact_groups.compiler]
@@ -493,7 +493,7 @@ disable_platforms = ["windows"]
 [artifacts.core-amdsmi]
 artifact_group = "core-amdsmi"
 type = "target-neutral"
-artifact_deps = ["base", "sysdeps"]
+artifact_deps = ["base", "sysdeps", "amd-llvm"]
 group_deps = ["third-party-libs"]
 feature_name = "CORE_AMDSMI"
 feature_group = "CORE"
