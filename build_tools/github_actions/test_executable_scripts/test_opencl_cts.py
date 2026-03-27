@@ -1,5 +1,7 @@
+import csv
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -20,7 +22,19 @@ THEROCK_DIR = SCRIPT_DIR.parent.parent.parent
 ROCM_PATH = THEROCK_BIN_DIR.parent
 
 CTS_BIN_DIR = ROCM_PATH / "share" / "opencl" / "opencl-cts" / "Release"
+QUICK_CSV = CTS_BIN_DIR / "opencl_conformance_tests_quick.csv"
 OPENCL_ICD_FILENAMES = ROCM_PATH / "lib" / "opencl" / "libamdocl64.so"
+
+# Device types that apply to GPU runs (non-device-specific entries always run)
+_GPU_DEVICE_TYPES = {
+    "CL_DEVICE_TYPE_GPU",
+    "CL_DEVICE_TYPE_DEFAULT",
+    "CL_DEVICE_TYPE_ALL",
+}
+_ALL_DEVICE_TYPES = _GPU_DEVICE_TYPES | {
+    "CL_DEVICE_TYPE_CPU",
+    "CL_DEVICE_TYPE_ACCELERATOR",
+}
 
 logging.info(f"THEROCK_BIN_DIR: {THEROCK_BIN_DIR}")
 logging.info(f"ROCM_PATH: {ROCM_PATH}")
@@ -62,8 +76,21 @@ def verify_opencl_runtime():
         logging.warning(f"Error running clinfo: {e}")
 
 
-def find_test_executables():
-    """Find all test_* executables in the CTS bin directory"""
+def parse_quick_csv() -> list[tuple[Path, list[str]]]:
+    """Parse opencl_conformance_tests_quick.csv and return (exe_path, args) pairs.
+
+    The CSV format (from run_conformance.py) is:
+      name,exe/path [args...]
+      device_type, name,exe/path [args...]
+
+    After install all executables are flat in CTS_BIN_DIR, so only the basename
+    of the exe path is used.  Device-specific entries for non-GPU device types
+    are skipped.
+    """
+    if not QUICK_CSV.exists():
+        logging.error(f"Quick CSV not found at {QUICK_CSV}")
+        sys.exit(1)
+
     if not CTS_BIN_DIR.exists():
         logging.error(
             f"OpenCL-CTS bin directory not found at {CTS_BIN_DIR}. "
@@ -71,28 +98,60 @@ def find_test_executables():
         )
         sys.exit(1)
 
-    test_executables = []
-    for test_exe in CTS_BIN_DIR.rglob("test_*"):
-        if test_exe.is_file() and os.access(test_exe, os.X_OK):
-            test_executables.append(test_exe)
+    tests: list[tuple[Path, list[str]]] = []
+    with open(QUICK_CSV, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
 
-    if not test_executables:
-        logging.error(f"No test executables found in {CTS_BIN_DIR}")
+            # Three-field line: device_type, name, command
+            m3 = re.match(r"^\s*(.+?)\s*,\s*(.+?)\s*,\s*(.+?)\s*$", line)
+            if m3:
+                device_type = m3.group(1)
+                if device_type not in _GPU_DEVICE_TYPES:
+                    logging.info(
+                        f"Skipping device-specific test ({device_type}): {m3.group(2)}"
+                    )
+                    continue
+                command = m3.group(3)
+            else:
+                # Two-field line: name, command
+                m2 = re.match(r"^\s*(.+?)\s*,\s*(.+?)\s*$", line)
+                if not m2:
+                    continue
+                command = m2.group(2)
+
+            # command = "subdir/test_exe [arg1 arg2 ...]"
+            cmd_parts = command.split()
+            exe_name = Path(cmd_parts[0].replace("/", os.sep)).name
+            args = cmd_parts[1:]
+
+            exe_path = CTS_BIN_DIR / exe_name
+            tests.append((exe_path, args))
+
+    if not tests:
+        logging.error(f"No tests found in {QUICK_CSV}")
         sys.exit(1)
 
-    test_executables.sort()
-    return test_executables
+    logging.info(f"Loaded {len(tests)} test entries from {QUICK_CSV}")
+    return tests
 
 
-def run_test(test_exe, env):
+def run_test(test_exe: Path, args: list[str], env: dict) -> bool:
     """Run a single test executable and return True if it passes"""
     test_name = test_exe.name
-    logging.info(f"++ Running test: {test_name}")
-
-    cmd = [str(test_exe)]
+    cmd = [str(test_exe)] + args
     logging.info(f"++ Exec [{test_exe.parent}]$ {shlex.join(cmd)}")
 
+    if not test_exe.exists():
+        logging.error(f"✗ MISSING: {shlex.join(cmd)}")
+        return False
+
     try:
+        print("========================")
+        print(f"Running command {cmd}")
+        print("========================")
         with subprocess.Popen(
             cmd,
             cwd=str(test_exe.parent),
@@ -105,11 +164,12 @@ def run_test(test_exe, env):
                 print(line, end="", flush=True)
             returncode = proc.wait()
 
+        label = shlex.join([test_name] + args)
         if returncode == 0:
-            logging.info(f"✓ PASSED: {test_name}")
+            logging.info(f"✓ PASSED: {label}")
             return True
         else:
-            logging.error(f"✗ FAILED: {test_name} (exit code: {returncode})")
+            logging.error(f"✗ FAILED: {label} (exit code: {returncode})")
             return False
 
     except subprocess.TimeoutExpired:
@@ -121,7 +181,7 @@ def run_test(test_exe, env):
 
 
 def run_tests():
-    """Run all OpenCL CTS test executables"""
+    """Run OpenCL CTS tests listed in the quick CSV"""
     logging.info("++ Running OpenCL-CTS tests")
 
     env = os.environ.copy()
@@ -135,13 +195,12 @@ def run_tests():
         env["LD_LIBRARY_PATH"] = ld_library_path
         logging.info(f"Set LD_LIBRARY_PATH to include: {lib_dir}")
 
-    test_executables = find_test_executables()
-    logging.info(f"Found {len(test_executables)} test executables")
+    tests = parse_quick_csv()
 
     passed = 0
     failed = 0
-    for test_exe in test_executables:
-        if run_test(test_exe, env):
+    for test_exe, args in tests:
+        if run_test(test_exe, args, env):
             passed += 1
         else:
             failed += 1

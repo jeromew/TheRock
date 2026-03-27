@@ -3,6 +3,10 @@
 include = [
   "share/opencl/opencl-cts/**",
 ]
+[components.test."opencl/opencl-cts/build/test_conformance"]
+include = [
+  "share/opencl/opencl-cts/Release/opencl_conformance_tests_quick.csv"
+]
 [components.test."opencl/opencl-icd-loader/stage"]
 include = [
   "lib/*.so*",
