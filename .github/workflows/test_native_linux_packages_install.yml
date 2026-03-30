@@ -146,8 +146,6 @@ jobs:
           if [ "${{ env.PKG_TYPE }}" = "deb" ]; then
             apt update
             apt install -y \
-              python3 \
-              python3-pip \
               wget \
               curl \
               ca-certificates \
@@ -161,8 +159,8 @@ jobs:
             # SLES prerequisites (uses zypper)
             zypper refresh
             zypper install -y \
-              python3 \
-              python3-pip \
+              python313 \
+              python313-pip \
               wget \
               curl \
               ca-certificates \
@@ -176,8 +174,8 @@ jobs:
           else
             # Use --allowerasing to handle curl-minimal conflict on AlmaLinux 9
             dnf install -y --allowerasing \
-              python3 \
-              python3-pip \
+              python3.12 \
+              python3.12-pip \
               wget \
               curl \
               ca-certificates \
@@ -192,19 +190,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Set up Python
+        if: ${{ env.PKG_TYPE == 'deb' }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+
       - name: Install Python Dependencies
         run: |
           if [ "${{ env.PKG_TYPE }}" = "deb" ]; then
-            # Ubuntu/Debian: use --break-system-packages flag
-            pip3 install --break-system-packages pyelftools requests prettytable PyYAML
+            pip install -r build_tools/packaging/linux/tests/requirements.txt
           else
-            # RHEL/CentOS/AlmaLinux/AZL: no --break-system-packages flag needed
-            pip3 install pyelftools requests prettytable PyYAML
+            if [[ "${{ inputs.os_profile }}" == sles* ]]; then
+              PY=python3.13
+            else
+              PY=python3.12
+            fi
+            "$PY" -m pip install --upgrade pip
+            "$PY" -m pip install pyelftools requests prettytable PyYAML
           fi
 
       - name: Package Installation Test
         id: install-test
         run: |
+          if [ "${{ env.PKG_TYPE }}" = "deb" ]; then
+            PY=python
+          elif [[ "${{ inputs.os_profile }}" == sles* ]]; then
+            PY=python3.13
+          else
+            PY=python3.12
+          fi
           echo "=========================================================================="
           echo "INSTALLATION TEST - NATIVE LINUX PACKAGES"
           echo "=========================================================================="
@@ -217,7 +232,7 @@ jobs:
           echo "=========================================================================="
           echo ""
 
-          python3 build_tools/packaging/linux/native_linux_package_install_test.py \
+          "$PY" build_tools/packaging/linux/native_linux_package_install_test.py \
             ${TEST_TYPE:+--test-type "$TEST_TYPE"} \
             --os-profile "$OS_PROFILE" \
             --repo-url "$REPO_URL" \
