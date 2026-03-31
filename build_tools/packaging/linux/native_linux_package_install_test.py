@@ -24,8 +24,8 @@ Path and repo name are overridable via environment variables: ROCM_REPO_NAME (re
 APT list, Zypper/Yum repo file and section), ROCM_APT_KEYRING_DIR, ROCM_APT_SOURCES_LIST,
 ROCM_APT_KEYRING_FILE, ROCM_ZYPP_REPOS_DIR, ROCM_YUM_REPOS_DIR,
 ROCM_RDHC_REL_PATH (relative path from install prefix to rdhc binary).
-Non-SLES RPM: before ROCm repo setup, RHEL partners repo at ROCM_YUM_REPOS_DIR/RHEL-partners.repo
-installs ocl-icd-devel (see ROCM_RHEL_PARTNERS_RELEASE).
+Non-SLES RPM: before ROCm repo setup, download_and_install_ocl_icd_devel_rpm (Rocky EL9 mirror: ocl-icd + opencl-headers + ocl-icd-devel, then dnf install local RPMs; works without RHEL subscription).
+install_ocl_icd_devel_via_rhel_partners_repo remains for internal mirrors.
 
 Prerequisites:
 - This script does NOT start Docker or a VM. You must run it inside an existing
@@ -91,9 +91,14 @@ Example invocations:
 
 import argparse
 import os
+import platform
+import shutil
 import subprocess
 import sys
+import tempfile
 import traceback
+import urllib.error
+import urllib.request
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
@@ -118,6 +123,42 @@ YUM_REPOS_DIR = _env("ROCM_YUM_REPOS_DIR", "/etc/yum.repos.d")
 # RHEL partners repo path segment in artifactory URLs (e.g. 9.4 for RHEL 9.4); set for rhel10, etc.
 RHEL_PARTNERS_RELEASE = _env("ROCM_RHEL_PARTNERS_RELEASE", "9.4")
 RHEL_PARTNERS_REPO_BASENAME = "RHEL-partners.repo"
+def _rpm_arch_dir() -> str:
+    m = platform.machine().lower()
+    return "aarch64" if m in ("aarch64", "arm64") else "x86_64"
+
+
+# EL9 OpenCL stack from Rocky public mirror (AppStream + CRB). Override per-RPM if your NVR/mirror differs.
+# ocl-icd-devel alone is not enough on unregistered RHEL: dnf needs local runtime + headers RPMs too.
+def _default_ocl_icd_runtime_rpm_url() -> str:
+    a = _rpm_arch_dir()
+    return (
+        f"https://dl.rockylinux.org/pub/rocky/9/AppStream/{a}/os/Packages/o/"
+        f"ocl-icd-2.2.13-4.el9.{a}.rpm"
+    )
+
+
+def _default_ocl_icd_devel_rpm_url() -> str:
+    a = _rpm_arch_dir()
+    return (
+        f"https://dl.rockylinux.org/pub/rocky/9/CRB/{a}/os/Packages/o/"
+        f"ocl-icd-devel-2.2.13-4.el9.{a}.rpm"
+    )
+
+
+OCL_ICD_RUNTIME_RPM_URL = _env(
+    "ROCM_OCL_ICD_RUNTIME_RPM_URL",
+    _default_ocl_icd_runtime_rpm_url(),
+)
+OCL_ICD_OPENCL_HEADERS_RPM_URL = _env(
+    "ROCM_OCL_ICD_OPENCL_HEADERS_RPM_URL",
+    "https://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/Packages/o/"
+    "opencl-headers-3.0-6.20201007gitd65bcc5.el9.0.1.noarch.rpm",
+)
+OCL_ICD_DEVEL_RPM_URL = _env(
+    "ROCM_OCL_ICD_DEVEL_RPM_URL",
+    _default_ocl_icd_devel_rpm_url(),
+)
 VERIFY_KEY_COMPONENTS = [
     "bin/rocminfo",
     "bin/hipcc",
@@ -139,6 +180,253 @@ INSTALL_TIMEOUT_SEC = 1800  # 30 minutes
 ROCMINFO_TIMEOUT_SEC = 30
 RDHC_TIMEOUT_SEC = 30
 VERIFY_MIN_COMPONENTS = 2
+OCL_ICD_DEVEL_DOWNLOAD_TIMEOUT_SEC = 300
+
+
+def _run_streaming(
+    cmd: list[str],
+    timeout_sec: int,
+    cwd: str | Path | None = None,
+) -> int:
+    """Run a command with streaming stdout/stderr and return its exit code.
+
+    Lines are printed as they are produced. Raises subprocess.TimeoutExpired
+    (after killing the process) or OSError on failure.
+    """
+    process = subprocess.Popen(
+        cmd,
+        cwd=str(cwd) if cwd is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    try:
+        for line in process.stdout:
+            print(line.rstrip())
+            sys.stdout.flush()
+        return process.wait(timeout=timeout_sec)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        raise
+
+
+def _try_enable_el9_crb_repos() -> None:
+    """Best-effort: enable CRB (or equivalent) on EL9 so dnf can resolve ocl-icd-devel deps."""
+    try:
+        ver = Path("/etc/os-release").read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        return
+    if "el9" not in ver and "version_id=\"9" not in ver and "version_id=9" not in ver:
+        return
+    print(
+        "[INFO] EL9: enabling CRB / codeready-builder (needed for ocl-icd-devel dependencies)..."
+    )
+    subprocess.run(
+        ["dnf", "install", "-y", "dnf-plugins-core"],
+        check=False,
+        timeout=300,
+    )
+    for repo in (
+        "crb",
+        "powertools",
+        "codeready-builder-for-rhel-9-x86_64-rpms",
+        "codeready-builder-for-rhel-9-aarch64-rpms",
+    ):
+        try:
+            r = subprocess.run(
+                ["dnf", "config-manager", "--set-enabled", repo],
+                check=False,
+                timeout=120,
+                capture_output=True,
+                text=True,
+            )
+            if r.returncode == 0:
+                print(f"[INFO] enabled repo id: {repo}")
+                break
+        except OSError:
+            continue
+    subprocess.run(["dnf", "makecache"], check=False, timeout=300)
+
+
+def is_non_sles_rpm_platform() -> bool:
+    """True if not SLES (for ocl-icd-devel RPM path); uses /etc/os-release ID."""
+    try:
+        for line in Path("/etc/os-release").read_text(
+            encoding="utf-8", errors="ignore"
+        ).splitlines():
+            if line.startswith("ID="):
+                ident = line.split("=", 1)[1].strip().strip('"').lower()
+                return ident != "sles"
+    except OSError:
+        return True
+    return True
+
+
+def _download_rpm_from_url(
+    rpm_url: str,
+    dest_dir: Path,
+    *,
+    timeout_sec: int = OCL_ICD_DEVEL_DOWNLOAD_TIMEOUT_SEC,
+) -> Path:
+    """Download one .rpm from URL into dest_dir. Raises RuntimeError on failure."""
+    rpm_url = rpm_url.strip()
+    if not rpm_url:
+        raise RuntimeError("RPM URL is empty")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    filename = rpm_url.rsplit("/", 1)[-1]
+    if not filename.endswith(".rpm"):
+        filename = "package.rpm"
+    out_path = dest_dir / filename
+    try:
+        with urllib.request.urlopen(rpm_url, timeout=timeout_sec) as resp:
+            out_path.write_bytes(resp.read())
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"download failed: {e}") from e
+    if not out_path.is_file() or out_path.stat().st_size == 0:
+        out_path.unlink(missing_ok=True)
+        raise RuntimeError("downloaded file is missing or empty")
+    return out_path
+
+
+def download_ocl_icd_el9_bundle_rpms(
+    dest_dir: Path | str | None = None,
+    *,
+    devel_url: str | None = None,
+    timeout_sec: int = OCL_ICD_DEVEL_DOWNLOAD_TIMEOUT_SEC,
+) -> list[Path]:
+    """Download ocl-icd (runtime), opencl-headers, and ocl-icd-devel for EL9 (Rocky mirror defaults).
+
+    Needed for ``dnf install`` on hosts without AppStream/CRB (e.g. unregistered RHEL): dependencies
+    are satisfied from local RPMs in one transaction.
+
+    Env overrides: ROCM_OCL_ICD_RUNTIME_RPM_URL, ROCM_OCL_ICD_OPENCL_HEADERS_RPM_URL,
+    ROCM_OCL_ICD_DEVEL_RPM_URL (devel_url overrides the last).
+
+    Returns paths in dependency-friendly order (runtime, headers, devel).
+    """
+    if not is_non_sles_rpm_platform():
+        raise RuntimeError(
+            "ocl-icd bundle download is for non-SLES rpm hosts; this host looks like SLES."
+        )
+    out_dir = Path(dest_dir or os.getcwd()).resolve()
+    runtime = _download_rpm_from_url(
+        OCL_ICD_RUNTIME_RPM_URL, out_dir, timeout_sec=timeout_sec
+    )
+    headers = _download_rpm_from_url(
+        OCL_ICD_OPENCL_HEADERS_RPM_URL, out_dir, timeout_sec=timeout_sec
+    )
+    devel = _download_rpm_from_url(
+        (devel_url or OCL_ICD_DEVEL_RPM_URL).strip(), out_dir, timeout_sec=timeout_sec
+    )
+    return [runtime, headers, devel]
+
+
+def download_ocl_icd_devel_rpm(
+    dest_dir: Path | str | None = None,
+    url: str | None = None,
+    *,
+    timeout_sec: int = OCL_ICD_DEVEL_DOWNLOAD_TIMEOUT_SEC,
+) -> Path:
+    """Download ocl-icd-devel RPM only (EL9 CRB by default). Raises RuntimeError on failure.
+
+    For installation without subscription, use download_ocl_icd_el9_bundle_rpms + install.
+    See ROCM_OCL_ICD_DEVEL_RPM_URL / OCL_ICD_DEVEL_RPM_URL.
+    """
+    if not is_non_sles_rpm_platform():
+        raise RuntimeError(
+            "ocl-icd-devel RPM download is for non-SLES rpm hosts; this host looks like SLES."
+        )
+    out_dir = Path(dest_dir or os.getcwd()).resolve()
+    return _download_rpm_from_url(
+        (url or OCL_ICD_DEVEL_RPM_URL).strip(), out_dir, timeout_sec=timeout_sec
+    )
+
+
+def install_ocl_icd_el9_local_rpms(
+    rpm_paths: list[Path],
+    *,
+    timeout_sec: int = INSTALL_TIMEOUT_SEC,
+) -> None:
+    """Install EL9 OpenCL RPMs from local paths in one dnf transaction (no subscription required).
+
+    Pass runtime + opencl-headers + ocl-icd-devel together so dependencies are satisfied offline.
+    """
+    paths = [p.resolve() for p in rpm_paths]
+    for p in paths:
+        if not p.is_file():
+            raise RuntimeError(f"RPM not found: {p}")
+    try:
+        rc = _run_streaming(
+            ["dnf", "install", "-y"] + [str(p) for p in paths],
+            timeout_sec,
+        )
+    except FileNotFoundError as e:
+        raise RuntimeError("dnf not found") from e
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError("dnf install timed out") from e
+    if rc != 0:
+        raise RuntimeError(f"dnf install failed (exit {rc})")
+
+
+def install_ocl_icd_devel_rpm(
+    rpm_path: Path,
+    *,
+    timeout_sec: int = INSTALL_TIMEOUT_SEC,
+) -> None:
+    """Install a single ocl-icd-devel .rpm with dnf (expects repos to supply dependencies)."""
+    path = rpm_path.resolve()
+    if not path.is_file():
+        raise RuntimeError(f"RPM not found: {path}")
+    _try_enable_el9_crb_repos()
+    try:
+        rc = _run_streaming(
+            ["dnf", "install", "-y", str(path)],
+            timeout_sec,
+        )
+    except FileNotFoundError as e:
+        raise RuntimeError("dnf not found") from e
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError("dnf install timed out") from e
+    if rc != 0:
+        raise RuntimeError(
+            f"dnf install failed (exit {rc}). On unregistered RHEL use "
+            "download_ocl_icd_el9_bundle_rpms + install_ocl_icd_el9_local_rpms instead."
+        )
+
+
+def download_and_install_ocl_icd_devel_rpm(rpm_url: str | None = None) -> bool:
+    """Download EL9 ocl-icd + opencl-headers + ocl-icd-devel, dnf install locally, then cleanup.
+
+    Uses a bundle so unregistered RHEL (no AppStream/CRB) can install without subscription.
+    """
+    if not is_non_sles_rpm_platform():
+        return True
+    tmp_dir = Path(tempfile.mkdtemp(prefix="rocm-ocl-icd-devel-"))
+    staged: list[Path] = []
+    try:
+        bundle = download_ocl_icd_el9_bundle_rpms(
+            dest_dir=tmp_dir, devel_url=rpm_url
+        )
+        for p in bundle:
+            sp = Path(tempfile.gettempdir()) / f"rocm-oclicd-{os.getpid()}-{p.name}"
+            shutil.copy2(p, sp)
+            staged.append(sp)
+        print(
+            "Installing ocl-icd stack with dnf (local RPMs): "
+            + ", ".join(str(s) for s in staged)
+        )
+        install_ocl_icd_el9_local_rpms(staged)
+        print("[PASS] ocl-icd stack installed (ocl-icd, opencl-headers, ocl-icd-devel)")
+        return True
+    except RuntimeError as e:
+        print(f"[FAIL] ocl-icd stack: {e}", file=sys.stderr)
+        return False
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        for sp in staged:
+            sp.unlink(missing_ok=True)
+
 
 def rhel_partners_repo_file_content(release_ver: str) -> str:
     """Build /etc/yum.repos.d/RHEL-partners.repo body for AMD SC V artifactory.
@@ -269,29 +557,6 @@ def run_simulate_install_test(pkg_type: str, packages_dir: str) -> bool:
         return False
 
 
-def _run_streaming(cmd: list[str], timeout_sec: int) -> int:
-    """Run a command with streaming stdout/stderr and return its exit code.
-
-    Lines are printed as they are produced. Raises subprocess.TimeoutExpired
-    (after killing the process) or OSError on failure.
-    """
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    try:
-        for line in process.stdout:
-            print(line.rstrip())
-            sys.stdout.flush()
-        return process.wait(timeout=timeout_sec)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        raise
-
-
 class NativeLinuxPackageInstallTest:
     """Runner for the native Linux package install test (repo setup, install, verification)."""
 
@@ -327,17 +592,17 @@ class NativeLinuxPackageInstallTest:
         return self.os_profile.lower().startswith("sles")
 
     def setup_rhel_partners_repo_and_install_ocl_icd_devel(self) -> bool:
-        """For RPM using dnf (not SLES): add RHEL-partners.repo and install ocl-icd-devel.
+        """For RPM using dnf (not SLES): download_and_install_ocl_icd_devel_rpm (CRB, then dnf).
 
-        Uses AMD artifactory BaseOS/AppStream/CRB (see rhel_partners_repo_file_content).
-        No-op (returns True) for deb and SLES. Release URL segment defaults to ROCM_RHEL_PARTNERS_RELEASE (9.4).
+        For internal networks, install_ocl_icd_devel_via_rhel_partners_repo remains available
+        but is not used on this code path. No-op (returns True) for deb and SLES.
 
         Returns:
-        True if no-op (deb/SLES) or install succeeded; False if repo write or dnf install failed.
+        True if no-op (deb/SLES) or install succeeded; False on failure.
         """
         if self.package_type != "rpm" or self._is_sles():
             return True
-        return install_ocl_icd_devel_via_rhel_partners_repo()
+        return download_and_install_ocl_icd_devel_rpm()
 
     def __init__(
         self,
