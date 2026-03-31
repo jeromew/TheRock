@@ -24,6 +24,8 @@ Path and repo name are overridable via environment variables: ROCM_REPO_NAME (re
 APT list, Zypper/Yum repo file and section), ROCM_APT_KEYRING_DIR, ROCM_APT_SOURCES_LIST,
 ROCM_APT_KEYRING_FILE, ROCM_ZYPP_REPOS_DIR, ROCM_YUM_REPOS_DIR,
 ROCM_RDHC_REL_PATH (relative path from install prefix to rdhc binary).
+Non-SLES RPM: before ROCm repo setup, RHEL partners repo at ROCM_YUM_REPOS_DIR/RHEL-partners.repo
+installs ocl-icd-devel (see ROCM_RHEL_PARTNERS_RELEASE).
 
 Prerequisites:
 - This script does NOT start Docker or a VM. You must run it inside an existing
@@ -113,6 +115,9 @@ APT_SOURCES_LIST = _env(
 APT_KEYRING_FILE = _env("ROCM_APT_KEYRING_FILE", "/etc/apt/keyrings/rocm.gpg")
 ZYPP_REPOS_DIR = _env("ROCM_ZYPP_REPOS_DIR", "/etc/zypp/repos.d")
 YUM_REPOS_DIR = _env("ROCM_YUM_REPOS_DIR", "/etc/yum.repos.d")
+# RHEL partners repo path segment in artifactory URLs (e.g. 9.4 for RHEL 9.4); set for rhel10, etc.
+RHEL_PARTNERS_RELEASE = _env("ROCM_RHEL_PARTNERS_RELEASE", "9.4")
+RHEL_PARTNERS_REPO_BASENAME = "RHEL-partners.repo"
 VERIFY_KEY_COMPONENTS = [
     "bin/rocminfo",
     "bin/hipcc",
@@ -134,6 +139,81 @@ INSTALL_TIMEOUT_SEC = 1800  # 30 minutes
 ROCMINFO_TIMEOUT_SEC = 30
 RDHC_TIMEOUT_SEC = 30
 VERIFY_MIN_COMPONENTS = 2
+
+def rhel_partners_repo_file_content(release_ver: str) -> str:
+    """Build /etc/yum.repos.d/RHEL-partners.repo body for AMD SC V artifactory.
+
+    Used for non-SLES RPM (dnf) hosts (e.g. rhel9, rhel10) to pull ocl-icd-devel.
+    release_ver is the path segment after rhel-remote/ (default from ROCM_RHEL_PARTNERS_RELEASE).
+    """
+    root = "http://scvartifactory.amd.com/artifactory/list/rhel-remote"
+    return (
+        "[RHEL-partners-baseos]\n"
+        f"name=Red Hat Enterprise Linux {release_ver} Partners - $basearch\n"
+        f"baseurl={root}/{release_ver}/$basearch/os/BaseOS\n"
+        "enabled=1\n"
+        "gpgcheck=0\n"
+        "\n"
+        "[RHEL-partners-appstream]\n"
+        f"name=Red Hat Enterprise Linux {release_ver} Partners (AppStream) - $basearch\n"
+        f"baseurl={root}/{release_ver}/$basearch/os/AppStream\n"
+        "enabled=1\n"
+        "gpgcheck=0\n"
+        "\n"
+        "[RHEL-partners-crb]\n"
+        "name=Red Hat Enterprise Linux $releasever Partners (CRB) - $basearch\n"
+        f"baseurl={root}/{release_ver}/$basearch/os/CRB\n"
+        "enabled=1\n"
+        "gpgcheck=0\n"
+    )
+
+
+def install_ocl_icd_devel_via_rhel_partners_repo(
+    yum_repos_dir: str | None = None,
+    release_ver: str | None = None,
+) -> bool:
+    """Write RHEL-partners.repo and install ocl-icd-devel via dnf (non-SLES RPM only).
+
+    Intended for non-SLES RPM hosts that use dnf; callers should not invoke this for deb or SLES.
+
+    Returns:
+        True if repo write and dnf install succeeded; False otherwise.
+    """
+    repos_dir = Path(yum_repos_dir or YUM_REPOS_DIR)
+    rel = (release_ver or RHEL_PARTNERS_RELEASE).strip() or "9.4"
+    repo_path = repos_dir / RHEL_PARTNERS_REPO_BASENAME
+    content = rhel_partners_repo_file_content(rel)
+
+    print("\n" + "=" * 80)
+    print("RHEL PARTNERS REPO: ocl-icd-devel (non-SLES RPM)")
+    print("=" * 80)
+    print(f"\nRelease path segment: {rel}")
+    print(f"Repo file: {repo_path}")
+
+    try:
+        repos_dir.mkdir(parents=True, exist_ok=True)
+        repo_path.write_text(content, encoding="utf-8")
+        print(f"[PASS] Wrote {repo_path}")
+        print("\nRepository configuration:\n")
+        print(content)
+    except OSError as e:
+        print(f"[FAIL] Could not write RHEL partners repo file: {e}", file=sys.stderr)
+        return False
+
+    print("\nInstalling ocl-icd-devel via dnf...")
+    try:
+        rc = _run_streaming(["dnf", "install", "-y", "ocl-icd-devel"], INSTALL_TIMEOUT_SEC)
+        if rc == 0:
+            print("\n[PASS] ocl-icd-devel installed")
+            return True
+        print(f"\n[FAIL] dnf install ocl-icd-devel failed (exit code: {rc})", file=sys.stderr)
+        return False
+    except subprocess.TimeoutExpired:
+        print("\n[FAIL] dnf install ocl-icd-devel timed out", file=sys.stderr)
+        return False
+    except OSError as e:
+        print(f"\n[FAIL] dnf install ocl-icd-devel: {e}", file=sys.stderr)
+        return False
 
 
 def run_simulate_install_test(pkg_type: str, packages_dir: str) -> bool:
@@ -245,6 +325,19 @@ class NativeLinuxPackageInstallTest:
         True if SLES, False otherwise
         """
         return self.os_profile.lower().startswith("sles")
+
+    def setup_rhel_partners_repo_and_install_ocl_icd_devel(self) -> bool:
+        """For RPM using dnf (not SLES): add RHEL-partners.repo and install ocl-icd-devel.
+
+        Uses AMD artifactory BaseOS/AppStream/CRB (see rhel_partners_repo_file_content).
+        No-op (returns True) for deb and SLES. Release URL segment defaults to ROCM_RHEL_PARTNERS_RELEASE (9.4).
+
+        Returns:
+        True if no-op (deb/SLES) or install succeeded; False if repo write or dnf install failed.
+        """
+        if self.package_type != "rpm" or self._is_sles():
+            return True
+        return install_ocl_icd_devel_via_rhel_partners_repo()
 
     def __init__(
         self,
@@ -702,6 +795,8 @@ gpgcheck=0
                 return False
             return self.install_deb_packages()
         else:
+            if not self.setup_rhel_partners_repo_and_install_ocl_icd_devel():
+                return False
             if not self.setup_rpm_repository():
                 return False
             return self.install_rpm_packages()
