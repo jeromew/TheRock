@@ -214,7 +214,7 @@ jobs:
         if: ${{ env.PKG_TYPE == 'rpm' && startsWith(inputs.os_profile, 'sles') == false }}
         run: |
           PY=python3.12
-          "$PY" ./build_tools/packaging/linux/download_ocl_icd_devel_rpm.py --mode bundle --install
+          "$PY" ./build_tools/packaging/linux/tests/download_ocl_icd_devel_rpm.py --mode bundle --install
 
       - name: Package Installation Test
         id: install-test
