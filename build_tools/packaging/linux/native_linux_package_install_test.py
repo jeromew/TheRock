@@ -123,6 +123,8 @@ YUM_REPOS_DIR = _env("ROCM_YUM_REPOS_DIR", "/etc/yum.repos.d")
 # RHEL partners repo path segment in artifactory URLs (e.g. 9.4 for RHEL 9.4); set for rhel10, etc.
 RHEL_PARTNERS_RELEASE = _env("ROCM_RHEL_PARTNERS_RELEASE", "9.4")
 RHEL_PARTNERS_REPO_BASENAME = "RHEL-partners.repo"
+
+
 def _rpm_arch_dir() -> str:
     m = platform.machine().lower()
     return "aarch64" if m in ("aarch64", "arm64") else "x86_64"
@@ -214,10 +216,12 @@ def _run_streaming(
 def _try_enable_el9_crb_repos() -> None:
     """Best-effort: enable CRB (or equivalent) on EL9 so dnf can resolve ocl-icd-devel deps."""
     try:
-        ver = Path("/etc/os-release").read_text(encoding="utf-8", errors="ignore").lower()
+        ver = (
+            Path("/etc/os-release").read_text(encoding="utf-8", errors="ignore").lower()
+        )
     except OSError:
         return
-    if "el9" not in ver and "version_id=\"9" not in ver and "version_id=9" not in ver:
+    if "el9" not in ver and 'version_id="9' not in ver and "version_id=9" not in ver:
         return
     print(
         "[INFO] EL9: enabling CRB / codeready-builder (needed for ocl-icd-devel dependencies)..."
@@ -252,9 +256,11 @@ def _try_enable_el9_crb_repos() -> None:
 def is_non_sles_rpm_platform() -> bool:
     """True if not SLES (for ocl-icd-devel RPM path); uses /etc/os-release ID."""
     try:
-        for line in Path("/etc/os-release").read_text(
-            encoding="utf-8", errors="ignore"
-        ).splitlines():
+        for line in (
+            Path("/etc/os-release")
+            .read_text(encoding="utf-8", errors="ignore")
+            .splitlines()
+        ):
             if line.startswith("ID="):
                 ident = line.split("=", 1)[1].strip().strip('"').lower()
                 return ident != "sles"
@@ -405,9 +411,7 @@ def download_and_install_ocl_icd_devel_rpm(rpm_url: str | None = None) -> bool:
     tmp_dir = Path(tempfile.mkdtemp(prefix="rocm-ocl-icd-devel-"))
     staged: list[Path] = []
     try:
-        bundle = download_ocl_icd_el9_bundle_rpms(
-            dest_dir=tmp_dir, devel_url=rpm_url
-        )
+        bundle = download_ocl_icd_el9_bundle_rpms(dest_dir=tmp_dir, devel_url=rpm_url)
         for p in bundle:
             sp = Path(tempfile.gettempdir()) / f"rocm-oclicd-{os.getpid()}-{p.name}"
             shutil.copy2(p, sp)
@@ -490,11 +494,16 @@ def install_ocl_icd_devel_via_rhel_partners_repo(
 
     print("\nInstalling ocl-icd-devel via dnf...")
     try:
-        rc = _run_streaming(["dnf", "install", "-y", "ocl-icd-devel"], INSTALL_TIMEOUT_SEC)
+        rc = _run_streaming(
+            ["dnf", "install", "-y", "ocl-icd-devel"], INSTALL_TIMEOUT_SEC
+        )
         if rc == 0:
             print("\n[PASS] ocl-icd-devel installed")
             return True
-        print(f"\n[FAIL] dnf install ocl-icd-devel failed (exit code: {rc})", file=sys.stderr)
+        print(
+            f"\n[FAIL] dnf install ocl-icd-devel failed (exit code: {rc})",
+            file=sys.stderr,
+        )
         return False
     except subprocess.TimeoutExpired:
         print("\n[FAIL] dnf install ocl-icd-devel timed out", file=sys.stderr)
