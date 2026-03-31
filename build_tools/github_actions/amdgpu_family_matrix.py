@@ -144,6 +144,22 @@ amdgpu_family_info_matrix_presubmit = {
             "build_variants": ["release"],
         },
     },
+    "gfx90a": {
+        "linux": {
+            "test-runs-on": "therock-ci-test-runners",
+            "family": "gfx90a",
+            "fetch-gfx-targets": ["gfx90a"],
+            "sanity_check_only_for_family": True,
+            "build_variants": ["release"],
+        },
+        "windows": {
+            "test-runs-on": "",
+            "family": "gfx90a",
+            "fetch-gfx-targets": [],
+            "build_variants": ["release"],
+            "expect_pytorch_failure": True,
+        },
+    },
 }
 
 # The 'postsubmit' matrix runs on 'push' triggers (for every commit to the default branch).
@@ -216,9 +232,7 @@ amdgpu_family_info_matrix_nightly = {
     },
     "gfx90a": {
         "linux": {
-            # Label is linux-gfx90a-gpu-rocm
-            # Downtime in 3/17/26 - 3/18/26 for maintenance
-            "test-runs-on": "",
+            "test-runs-on": "therock-ci-test-runners",
             "family": "gfx90a",
             "fetch-gfx-targets": ["gfx90a"],
             "sanity_check_only_for_family": True,
