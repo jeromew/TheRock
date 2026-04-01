@@ -54,8 +54,15 @@ jobs:
         run: pip install boto3
 
       - name: Determine IAM role
+        if: ${{ always() }}
         id: iam
         run: |
+          # Forks and external repos use runner base credentials (no OIDC role).
+          if [[ "${{ github.repository }}" != "ROCm/TheRock" || "${{ github.event.pull_request.head.repo.fork }}" == "true" ]]; then
+            echo "iam_role=" >> $GITHUB_OUTPUT
+            echo "Using runner base credentials (fork or external repo)"
+            exit 0
+          fi
           RELEASE_TYPE="${{ inputs.release_type }}"
           if [[ -z "${RELEASE_TYPE}" ]]; then
             echo "iam_role=arn:aws:iam::692859939525:role/therock-ci" >> $GITHUB_OUTPUT
@@ -64,7 +71,7 @@ jobs:
           fi
 
       - name: Configure AWS Credentials
-        if: ${{ github.repository == 'ROCm/TheRock' && !github.event.pull_request.head.repo.fork }}
+        if: ${{ always() && steps.iam.outputs.iam_role != '' }}
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
         with:
           aws-region: us-east-2
