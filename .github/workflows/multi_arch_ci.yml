@@ -81,6 +81,7 @@ jobs:
       test_labels: ${{ needs.setup.outputs.linux_test_labels }}
       rocm_package_version: ${{ needs.setup.outputs.rocm_package_version }}
       test_type: ${{ needs.setup.outputs.test_type }}
+      release_type: "dev"  # DO NOT SUBMIT - this should go in a multi_arch_release.yml workflow instead
     permissions:
       contents: read
       id-token: write
@@ -100,6 +101,7 @@ jobs:
       test_labels: ${{ needs.setup.outputs.windows_test_labels }}
       rocm_package_version: ${{ needs.setup.outputs.rocm_package_version }}
       test_type: ${{ needs.setup.outputs.test_type }}
+      release_type: "dev"  # DO NOT SUBMIT - this should go in a multi_arch_release.yml workflow instead
     permissions:
       contents: read
       id-token: write
