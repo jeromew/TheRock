@@ -9,6 +9,13 @@ on:
       build_variant:
         type: string
         default: "release"
+      release_type:
+        description: >-
+          Release type: "" for CI builds, or "dev", "nightly", "prerelease"
+          for release builds. Controls artifact bucket selection, IAM role,
+          and package versioning.
+        type: string
+        default: ""
     outputs:
       enable_build_jobs:
         description: Whether to enable build jobs.
@@ -63,4 +70,6 @@ jobs:
 
       - name: Compute package version
         id: rocm_package_version
-        run: python ./build_tools/compute_rocm_package_version.py --release-type=dev
+        run: |
+          python ./build_tools/compute_rocm_package_version.py \
+            --release-type=${{ inputs.release_type || 'dev' }}
