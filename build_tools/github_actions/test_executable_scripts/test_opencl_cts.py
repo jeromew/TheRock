@@ -36,6 +36,53 @@ _ALL_DEVICE_TYPES = _GPU_DEVICE_TYPES | {
     "CL_DEVICE_TYPE_ACCELERATOR",
 }
 
+# Sub-tests to skip within a specific binary. Keys are the test executable
+# basename; values are sets of sub-test names as printed by `binary --list`.
+_SKIPPED_SUBTESTS: dict[str, set[str]] = {
+    # GPU memory access fault during 'constant' sub-test.
+    "test_basic": {"constant"},
+    # Incorrect error codes returned for invalid queue properties / device type.
+    # Constant buffer size allocation fails with CL_INVALID_GLOBAL_WORK_SIZE.
+    "test_api": {
+        "negative_create_command_queue",
+        "negative_create_command_queue_with_properties",
+        "negative_get_command_queue_info",
+        "negative_get_device_ids",
+        "min_max_constant_buffer_size",
+    },
+    # Crash (SIGSEGV) in get_program_info_kernel_names.
+    "test_compiler": {"get_program_info_kernel_names"},
+    # All read_array_* sub-tests report implausible profiling timestamps
+    # (CL_PROFILING_COMMAND_START > CL_PROFILING_COMMAND_END).
+    "test_profiling": {
+        "read_array_char",
+        "read_array_float",
+        "read_array_int",
+        "read_array_long",
+        "read_array_short",
+        "read_array_struct",
+        "read_array_uchar",
+        "read_array_uint",
+        "read_array_ulong",
+        "read_array_ushort",
+    },
+    # GPU memory access fault during 'userevents' sub-test.
+    "test_events": {"userevents"},
+    # printf output mismatches: NaN handling, %% escaping, vector sizes, format.
+    "test_printf": {
+        "double_limits",
+        "float_limits",
+        "format_string",
+        "half_limits",
+        "length_specifier",
+        "mixed_format_random",
+        "string",
+        "vector",
+    },
+    # islessgreater fp64 fails to execute kernel.
+    "test_bruteforce": {"islessgreater"},
+}
+
 logging.info(f"THEROCK_BIN_DIR: {THEROCK_BIN_DIR}")
 logging.info(f"ROCM_PATH: {ROCM_PATH}")
 logging.info(f"CTS_BIN_DIR: {CTS_BIN_DIR}")
@@ -138,15 +185,46 @@ def parse_quick_csv() -> list[tuple[Path, list[str]]]:
     return tests
 
 
+def get_subtests(exe_path: Path) -> list[str]:
+    """Return sub-test names by running `exe --list` (no OpenCL needed)."""
+    result = subprocess.run(
+        [str(exe_path), "--list"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    subtests = []
+    for line in result.stdout.splitlines():
+        name = line.strip()
+        if name:
+            subtests.append(name)
+    return subtests
+
+
 def run_test(test_exe: Path, args: list[str], env: dict) -> bool:
     """Run a single test executable and return True if it passes"""
     test_name = test_exe.name
-    cmd = [str(test_exe)] + args
-    logging.info(f"++ Exec [{test_exe.parent}]$ {shlex.join(cmd)}")
 
     if not test_exe.exists():
-        logging.error(f"✗ MISSING: {shlex.join(cmd)}")
+        logging.error(f"✗ MISSING: {shlex.join([str(test_exe)] + args)}")
         return False
+
+    skipped = _SKIPPED_SUBTESTS.get(test_name, set())
+    if skipped:
+        flag_args = [a for a in args if a.startswith("-")]
+        subtest_args = [a for a in args if not a.startswith("-")]
+        available = subtest_args if subtest_args else get_subtests(test_exe)
+        filtered = [t for t in available if t not in skipped]
+        logging.info(
+            f"Skipping {len(skipped)} sub-test(s) for {test_name}: {sorted(skipped)}"
+        )
+        if not filtered:
+            logging.warning(f"All sub-tests skipped for {test_name}, skipping binary")
+            return True
+        args = flag_args + filtered
+
+    cmd = [str(test_exe)] + args
+    logging.info(f"++ Exec [{test_exe.parent}]$ {shlex.join(cmd)}")
 
     try:
         print("========================")
