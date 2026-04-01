@@ -1,0 +1,60 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+
+name: "Configure AWS credentials for artifact uploads"
+
+description: >-
+  Determine the IAM role for the artifacts S3 bucket and assume it via OIDC.
+  Forks and external repos skip OIDC and use runner base credentials.
+  Release builds (dev/nightly/prerelease) use therock-{release_type} roles
+  instead of therock-ci.
+  See the "Authentication" section in docs/development/s3_buckets.md.
+
+inputs:
+  release_type:
+    description: 'Release type: "" for CI, or "dev", "nightly", "prerelease".'
+    default: ""
+  special_characters_workaround:
+    description: "Pass true on Windows runners to work around special characters in AWS secret keys."
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Determine IAM role
+      if: ${{ always() }}
+      id: iam
+      shell: bash
+      run: |
+        RELEASE_TYPE="${{ inputs.release_type }}"
+        REPO="${{ github.repository }}"
+
+        if [[ -n "${RELEASE_TYPE}" ]]; then
+          # Release builds should only run in ROCm/TheRock or ROCm/rockrel, never from pull requests.
+          if [[ "${REPO}" != "ROCm/TheRock" && "${REPO}" != "ROCm/rockrel" ]]; then
+            echo "::error::release_type='${RELEASE_TYPE}' is set but repository '${REPO}' is not ROCm/TheRock or ROCm/rockrel"
+            exit 1
+          fi
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "::error::release_type='${RELEASE_TYPE}' is set but this is a pull request"
+            exit 1
+          fi
+
+          echo "Using therock-${RELEASE_TYPE} iam_role"
+          echo "iam_role=arn:aws:iam::692859939525:role/therock-${RELEASE_TYPE}" >> $GITHUB_OUTPUT
+        elif [[ "${REPO}" == "ROCm/TheRock" && "${{ github.event.pull_request.head.repo.fork }}" != "true" ]]; then
+          echo "Using therock-ci iam_role"
+          echo "iam_role=arn:aws:iam::692859939525:role/therock-ci" >> $GITHUB_OUTPUT
+        else
+          # Forks and external repos use runner base credentials (no OIDC role).
+          echo "Using runner base credentials (fork or external repo)"
+          echo "iam_role=" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Configure AWS Credentials
+      if: ${{ always() && steps.iam.outputs.iam_role != '' }}
+      uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
+      with:
+        aws-region: us-east-2
+        role-to-assume: ${{ steps.iam.outputs.iam_role }}
+        special-characters-workaround: ${{ inputs.special_characters_workaround }}
