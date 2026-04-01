@@ -66,6 +66,7 @@ jobs:
         id: configure
         env:
           BUILD_VARIANT: ${{ inputs.build_variant }}
+          RELEASE_TYPE: ${{ inputs.release_type }}
         run: python ./build_tools/github_actions/configure_multi_arch_ci.py
 
       - name: Compute package version
