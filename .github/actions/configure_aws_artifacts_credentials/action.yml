@@ -14,9 +14,6 @@ inputs:
   release_type:
     description: 'Release type: "" for CI, or "dev", "nightly", "prerelease".'
     default: ""
-  special_characters_workaround:
-    description: "Pass true on Windows runners to work around special characters in AWS secret keys."
-    default: "false"
 
 runs:
   using: "composite"
@@ -57,4 +54,4 @@ runs:
       with:
         aws-region: us-east-2
         role-to-assume: ${{ steps.iam.outputs.iam_role }}
-        special-characters-workaround: ${{ inputs.special_characters_workaround }}
+        special-characters-workaround: ${{ runner.os == 'Windows' }}
