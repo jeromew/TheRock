@@ -64,6 +64,7 @@ jobs:
     uses: ./.github/workflows/setup_multi_arch.yml
     with:
       build_variant: "release"
+      release_type: "dev"  # DO NOT SUBMIT - this should go in a multi_arch_release.yml workflow instead
 
   linux_build_and_test:
     name: Linux::${{ fromJSON(needs.setup.outputs.linux_build_config || '{}').build_variant_label || 'skip' }}
