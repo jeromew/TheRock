@@ -5,12 +5,25 @@
 # Forked from https://github.com/pytorch/test-infra/blob/1ffc7f7b3b421b57c380de469e11744f54399f09/s3_management/update_dependencies.py.
 # Changes incorporated from https://github.com/pytorch/test-infra/blob/a87d94b148bbd2c68e69e542350099a971f4c8d3/s3_management/update_dependencies.py.
 
-from typing import Dict, List
+from typing import Dict, List, Protocol
 from os import getenv
 
 import boto3  # type: ignore[import-untyped]
-from boto3.resources.base import ServiceResource
 import re
+
+
+class S3Client(Protocol):
+    def get_paginator(self, operation_name: str): ...
+
+
+class S3BucketObject(Protocol):
+    def put(self, *, ContentType: str, Body: bytes) -> None: ...
+
+
+class S3Bucket(Protocol):
+    name: str
+
+    def Object(self, key: str) -> S3BucketObject: ...
 
 
 # Whitelist of allowed wheel platform and Python tags.
@@ -65,7 +78,7 @@ def get_project_paths() -> List[str]:
     )
 
 
-def get_s3_bucket(bucket_name: str | None = None) -> ServiceResource:
+def get_s3_bucket(bucket_name: str | None = None) -> S3Bucket:
     s3 = boto3.resource("s3")
     resolved_bucket_name = bucket_name or getenv("S3_BUCKET_PY")
     if not resolved_bucket_name:
@@ -73,13 +86,11 @@ def get_s3_bucket(bucket_name: str | None = None) -> ServiceResource:
     return s3.Bucket(resolved_bucket_name)
 
 
-def detect_prefixes_from_bucket(
-    bucket: ServiceResource, base_prefix: str
-) -> List[str]:
+def detect_prefixes_from_bucket(bucket: S3Bucket, base_prefix: str) -> List[str]:
     normalized_base_prefix = base_prefix.rstrip("/") + "/"
     print(f"INFO: Auto-detecting prefixes under '{normalized_base_prefix}'")
 
-    client = boto3.client("s3")
+    client: S3Client = boto3.client("s3")
     paginator = client.get_paginator("list_objects_v2")
     page_iterator = paginator.paginate(
         Bucket=bucket.name,
@@ -99,11 +110,17 @@ def detect_prefixes_from_bucket(
 
 def resolve_target_prefixes(
     *,
-    bucket: ServiceResource,
+    bucket: S3Bucket,
     explicit_prefix: str | None = None,
     auto_detect_prefixes: bool = False,
     starting_from: str | None = None,
 ) -> List[str]:
+    if explicit_prefix and auto_detect_prefixes:
+        raise RuntimeError("Cannot use --prefix together with --auto-detect-prefixes")
+
+    if explicit_prefix and starting_from:
+        raise RuntimeError("Cannot use --prefix together with --starting-from")
+
     if explicit_prefix:
         return [explicit_prefix.rstrip("/")]
 
@@ -120,8 +137,7 @@ def resolve_target_prefixes(
         return detect_prefixes_from_bucket(bucket, starting_from)
 
     raise RuntimeError(
-        "Must provide either --prefix or --auto-detect-prefixes with "
-        "--starting-from"
+        "Must provide either --prefix or --auto-detect-prefixes with " "--starting-from"
     )
 
 
@@ -194,7 +210,7 @@ def is_wheel_allowed(pkg: str) -> bool:
 
 
 def upload_missing_whls(
-    bucket: ServiceResource,
+    bucket: S3Bucket,
     pkg_name: str = "numpy",
     prefix: str = "whl/test",
     *,
