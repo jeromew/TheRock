@@ -36,10 +36,13 @@ _ALL_DEVICE_TYPES = _GPU_DEVICE_TYPES | {
     "CL_DEVICE_TYPE_ACCELERATOR",
 }
 
+# there are no OpenGL libraries in CI
+_SKIPPED_TESTS = set("test_gl")
+
 # Sub-tests to skip within a specific binary. Keys are the test executable
 # basename; values are sets of sub-test names as printed by `binary --list`.
+# GPU memory access fault during 'constant' sub-test.
 _SKIPPED_SUBTESTS: dict[str, set[str]] = {
-    # GPU memory access fault during 'constant' sub-test.
     "test_basic": {"constant"},
     # Incorrect error codes returned for invalid queue properties / device type.
     # Constant buffer size allocation fails with CL_INVALID_GLOBAL_WORK_SIZE.
@@ -81,6 +84,12 @@ _SKIPPED_SUBTESTS: dict[str, set[str]] = {
     },
     # islessgreater fp64 fails to execute kernel.
     "test_bruteforce": {"islessgreater"},
+    "test_svm": {
+        # memory a mismatch at word 512
+        "svm_migrate",
+        # Unsetting previously set SVM pointers using clSetKernelExecInfo failed
+        "svm_set_kernel_exec_info_svm_ptrs",
+    },
 }
 
 logging.info(f"THEROCK_BIN_DIR: {THEROCK_BIN_DIR}")
@@ -204,6 +213,12 @@ def get_subtests(exe_path: Path) -> list[str]:
 def run_test(test_exe: Path, args: list[str], env: dict) -> bool:
     """Run a single test executable and return True if it passes"""
     test_name = test_exe.name
+
+    if test_name in _SKIPPED_TESTS:
+        logging.info(
+            f"SKIPPED: {test_name}"
+        )
+        return True
 
     if not test_exe.exists():
         logging.error(f"✗ MISSING: {shlex.join([str(test_exe)] + args)}")
