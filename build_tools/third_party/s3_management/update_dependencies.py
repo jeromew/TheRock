@@ -90,7 +90,7 @@ def detect_prefixes_from_bucket(bucket: S3Bucket, base_prefix: str) -> List[str]
     normalized_base_prefix = base_prefix.rstrip("/") + "/"
     print(f"INFO: Auto-detecting prefixes under '{normalized_base_prefix}'")
 
-    client: S3Client = boto3.client("s3")
+    client = bucket.meta.client
     paginator = client.get_paginator("list_objects_v2")
     page_iterator = paginator.paginate(
         Bucket=bucket.name,
