@@ -5,25 +5,50 @@
 # Forked from https://github.com/pytorch/test-infra/blob/1ffc7f7b3b421b57c380de469e11744f54399f09/s3_management/update_dependencies.py.
 # Changes incorporated from https://github.com/pytorch/test-infra/blob/a87d94b148bbd2c68e69e542350099a971f4c8d3/s3_management/update_dependencies.py.
 
-from typing import Dict, List, Protocol
+from typing import Protocol, Iterator, Dict, List
 from os import getenv
 
 import boto3  # type: ignore[import-untyped]
 import re
 
 
+class S3Page(Protocol):
+    def get(self, key: str, default: List[Dict[str, str]]) -> List[Dict[str, str]]: ...
+
+
+class S3PageIterator(Protocol):
+    def __iter__(self) -> Iterator[S3Page]: ...
+
+
+class S3Paginator(Protocol):
+    def paginate(
+        self,
+        *,
+        Bucket: str,
+        Prefix: str,
+        Delimiter: str,
+    ) -> S3PageIterator: ...
+
+
 class S3Client(Protocol):
-    def get_paginator(self, operation_name: str): ...
+    def get_paginator(self, operation_name: str) -> S3Paginator: ...
 
 
 class S3BucketObject(Protocol):
     def put(self, *, ContentType: str, Body: bytes) -> None: ...
 
 
+class S3BucketMeta(Protocol):
+    client: S3Client
+
+
 class S3Bucket(Protocol):
     name: str
 
     def Object(self, key: str) -> S3BucketObject: ...
+
+    @property
+    def meta(self) -> S3BucketMeta: ...
 
 
 # Whitelist of allowed wheel platform and Python tags.
@@ -137,7 +162,7 @@ def resolve_target_prefixes(
         return detect_prefixes_from_bucket(bucket, starting_from)
 
     raise RuntimeError(
-        "Must provide either --prefix or --auto-detect-prefixes with " "--starting-from"
+        "Must provide either --prefix or --auto-detect-prefixes with --starting-from"
     )
 
 
