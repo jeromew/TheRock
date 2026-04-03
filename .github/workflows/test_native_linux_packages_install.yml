@@ -154,11 +154,11 @@ jobs:
               ca-certificates \
               git \
               lsb-release
-            if [ "$TEST_TYPE" = "full" ]; then
+            if [ "${{ env.TEST_TYPE }}" = "full" ]; then
               echo "Extra OS packages for --test-type full (e.g. rdhc): pciutils, kmod, apt-utils"
               apt install -y pciutils kmod apt-utils
             fi
-          elif [[ "${{ inputs.os_profile }}" == sles* ]]; then
+          elif [[ "${{ env.OS_PROFILE }}" == sles* ]]; then
             # SLES prerequisites (uses BCI base - zypper)
             zypper refresh
             zypper install -y \
@@ -170,7 +170,7 @@ jobs:
               git \
               lsb-release \
               update-alternatives
-            if [ "$TEST_TYPE" = "full" ]; then
+            if [ "${{ env.TEST_TYPE }}" = "full" ]; then
               echo "Extra OS packages for --test-type full on SLES (e.g. rdhc): pciutils, kmod"
               zypper install -y pciutils kmod
             fi
@@ -184,7 +184,7 @@ jobs:
               ca-certificates \
               git \
               dnf-plugins-core
-            if [ "$TEST_TYPE" = "full" ]; then
+            if [ "${{ env.TEST_TYPE }}" = "full" ]; then
               echo "Extra OS packages for --test-type full (e.g. rdhc): pciutils, kmod"
               dnf install -y --allowerasing pciutils kmod
             fi
@@ -196,31 +196,31 @@ jobs:
       - name: Set up Python
         run: |
           python3 build_tools/packaging/linux/set_python_cmd.py \
-            --os-profile "$OS_PROFILE" >> "$GITHUB_ENV"
+            --os-profile "${{ env.OS_PROFILE }}" >> "$GITHUB_ENV"
 
       - name: Install Python Dependencies
         run: |
-          "$PYTHON_CMD" -m pip install --upgrade pip
-          "$PYTHON_CMD" -m pip install -r build_tools/packaging/linux/tests/requirements.txt
+          ${{ env.PYTHON_CMD }} -m pip install --upgrade pip
+          ${{ env.PYTHON_CMD }} -m pip install -r build_tools/packaging/linux/tests/requirements.txt
 
       - name: Package Installation Test
         id: install-test
         run: |
-          echo "TEST - OS:${{ inputs.os_profile }} REPO:${{ env.REPO_URL }} Arch:${{ env.GFX_ARCH }} Type:${{ env.RELEASE_TYPE }}"
-          "$PYTHON_CMD" build_tools/packaging/linux/native_linux_package_install_test.py \
-            --test-type "$TEST_TYPE" \
-            --os-profile "$OS_PROFILE" \
-            --repo-url "$REPO_URL" \
-            --gfx-arch "$GFX_ARCH" \
-            --install-prefix "$INSTALL_PREFIX" \
-            --release-type "$RELEASE_TYPE" \
-            --gpg-key-url "$GPG_KEY_URL"
+          echo "TEST - OS:${{ env.OS_PROFILE }} REPO:${{ env.REPO_URL }} Arch:${{ env.GFX_ARCH }} Type:${{ env.RELEASE_TYPE }}"
+          ${{ env.PYTHON_CMD }} build_tools/packaging/linux/native_linux_package_install_test.py \
+            --test-type "${{ env.TEST_TYPE }}" \
+            --os-profile "${{ env.OS_PROFILE }}" \
+            --repo-url "${{ env.REPO_URL }}" \
+            --gfx-arch "${{ env.GFX_ARCH }}" \
+            --install-prefix "${{ env.INSTALL_PREFIX }}" \
+            --release-type "${{ env.RELEASE_TYPE }}" \
+            --gpg-key-url "${{ env.GPG_KEY_URL }}"
 
       - name: Test Report
         if: always()
         run: |
           sep='=========================================================================='
-          TT=$(echo "${TEST_TYPE:-sanity}" | tr '[:upper:]' '[:lower:]')
+          TT=$(echo "${{ env.TEST_TYPE }}" | tr '[:upper:]' '[:lower:]')
           case "$TT" in
             full)
               msg_ok='Package installation full verification completed successfully (repo setup, install, basic verification, RDHC).'
