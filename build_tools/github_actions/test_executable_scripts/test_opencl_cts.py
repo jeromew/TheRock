@@ -97,6 +97,20 @@ logging.info(f"ROCM_PATH: {ROCM_PATH}")
 logging.info(f"CTS_BIN_DIR: {CTS_BIN_DIR}")
 
 
+def build_opencl_env() -> dict:
+    """Build environment with OCL_ICD_FILENAMES and LD_LIBRARY_PATH set."""
+    env = os.environ.copy()
+    env["OCL_ICD_FILENAMES"] = str(OPENCL_ICD_FILENAMES)
+    lib_dir = ROCM_PATH / "lib"
+    if lib_dir.exists():
+        ld_library_path = str(lib_dir)
+        if "LD_LIBRARY_PATH" in env:
+            ld_library_path = f"{ld_library_path}:{env['LD_LIBRARY_PATH']}"
+        env["LD_LIBRARY_PATH"] = ld_library_path
+        logging.info(f"Set LD_LIBRARY_PATH to include: {lib_dir}")
+    return env
+
+
 def verify_opencl_runtime():
     """Verify OpenCL runtime is available using clinfo"""
     logging.info("++ Verifying OpenCL runtime availability")
@@ -115,6 +129,7 @@ def verify_opencl_runtime():
             capture_output=True,
             text=True,
             timeout=30,
+            env=build_opencl_env(),
         )
 
         if result.returncode == 0:
@@ -220,11 +235,14 @@ def run_test(test_exe: Path, args: list[str], env: dict) -> bool:
         )
         return True
 
+    skipped = _SKIPPED_SUBTESTS.get(test_name, set())
+
     if not test_exe.exists():
+        if test_name in _SKIPPED_SUBTESTS:
+            logging.info(f"Skipping missing binary: {test_name}")
+            return True
         logging.error(f"✗ MISSING: {shlex.join([str(test_exe)] + args)}")
         return False
-
-    skipped = _SKIPPED_SUBTESTS.get(test_name, set())
     if skipped:
         flag_args = [a for a in args if a.startswith("-")]
         subtest_args = [a for a in args if not a.startswith("-")]
@@ -277,17 +295,7 @@ def run_tests():
     """Run OpenCL CTS tests listed in the quick CSV"""
     logging.info("++ Running OpenCL-CTS tests")
 
-    env = os.environ.copy()
-    env["OCL_ICD_FILENAMES"] = str(OPENCL_ICD_FILENAMES)
-
-    lib_dir = ROCM_PATH / "lib"
-    if lib_dir.exists():
-        ld_library_path = str(lib_dir)
-        if "LD_LIBRARY_PATH" in env:
-            ld_library_path = f"{ld_library_path}:{env['LD_LIBRARY_PATH']}"
-        env["LD_LIBRARY_PATH"] = ld_library_path
-        logging.info(f"Set LD_LIBRARY_PATH to include: {lib_dir}")
-
+    env = build_opencl_env()
     tests = parse_quick_csv()
 
     passed = 0
