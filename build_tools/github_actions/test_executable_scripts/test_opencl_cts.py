@@ -230,9 +230,7 @@ def run_test(test_exe: Path, args: list[str], env: dict) -> bool:
     test_name = test_exe.name
 
     if test_name in _SKIPPED_TESTS:
-        logging.info(
-            f"SKIPPED: {test_name}"
-        )
+        logging.info(f"SKIPPED: {test_name}")
         return True
 
     skipped = _SKIPPED_SUBTESTS.get(test_name, set())
