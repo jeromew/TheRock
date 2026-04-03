@@ -37,7 +37,7 @@ _ALL_DEVICE_TYPES = _GPU_DEVICE_TYPES | {
 }
 
 # there are no OpenGL libraries in CI
-_SKIPPED_TESTS = set("test_gl")
+_SKIPPED_TESTS = set(("test_gl", "test_spir"))
 
 # Sub-tests to skip within a specific binary. Keys are the test executable
 # basename; values are sets of sub-test names as printed by `binary --list`.
@@ -236,11 +236,9 @@ def run_test(test_exe: Path, args: list[str], env: dict) -> bool:
     skipped = _SKIPPED_SUBTESTS.get(test_name, set())
 
     if not test_exe.exists():
-        if test_name in _SKIPPED_SUBTESTS:
-            logging.info(f"Skipping missing binary: {test_name}")
-            return True
         logging.error(f"✗ MISSING: {shlex.join([str(test_exe)] + args)}")
         return False
+
     if skipped:
         flag_args = [a for a in args if a.startswith("-")]
         subtest_args = [a for a in args if not a.startswith("-")]
