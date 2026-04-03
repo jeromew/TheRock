@@ -138,6 +138,8 @@ jobs:
       GFX_ARCH: ${{ inputs.gfx_arch || 'gfx94x' }}
       INSTALL_PREFIX: ${{ inputs.install_prefix || '/opt/rocm/core' }}
       TEST_TYPE: ${{ inputs.test_type || 'sanity' }}
+      # Declared for static analysis; real value is set by "Set up Python" via GITHUB_ENV.
+      PYTHON_CMD: ""
     steps:
       - name: Install System Prerequisites
         run: |
@@ -146,9 +148,6 @@ jobs:
           if [ "${{ env.PKG_TYPE }}" = "deb" ]; then
             apt update
             apt install -y \
-              python3.12 \
-              python3.12-venv \
-              python3-pip \
               wget \
               curl \
               ca-certificates \
@@ -162,8 +161,6 @@ jobs:
             # SLES prerequisites (uses BCI base - zypper)
             zypper refresh
             zypper install -y \
-              python313 \
-              python313-pip \
               wget \
               curl \
               ca-certificates \
@@ -177,8 +174,6 @@ jobs:
           else
             # rpm (non-SLES, e.g. rhel10): RHEL UBI 9.4; Use --allowerasing to handle curl-minimal conflict on RHEL UBI 9.4
             dnf install -y --allowerasing \
-              python3.12 \
-              python3.12-pip \
               wget \
               curl \
               ca-certificates \
@@ -195,8 +190,20 @@ jobs:
 
       - name: Set up Python
         run: |
+          if ! command -v python3 >/dev/null 2>&1; then
+            if [ "${{ env.PKG_TYPE }}" = "deb" ]; then
+              apt-get update -qq
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 ca-certificates
+            elif [[ "${{ env.OS_PROFILE }}" == sles* ]]; then
+              zypper --non-interactive refresh
+              zypper --non-interactive install -y python313
+            else
+              dnf install -y --allowerasing python3.12 python3.12-pip
+            fi
+          fi
           python3 build_tools/packaging/linux/set_python_cmd.py \
-            --os-profile "${{ env.OS_PROFILE }}" >> "$GITHUB_ENV"
+            --os-profile "${{ env.OS_PROFILE }}" \
+            --install-runtime --output-format github >> "$GITHUB_ENV"
 
       - name: Install Python Dependencies
         run: |
