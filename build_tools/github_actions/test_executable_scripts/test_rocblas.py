@@ -13,12 +13,9 @@ THEROCK_BIN_DIR = os.getenv("THEROCK_BIN_DIR")
 SCRIPT_DIR = Path(__file__).resolve().parent
 THEROCK_DIR = SCRIPT_DIR.parent.parent.parent
 
-# Importing is_asan from github_actions_utils.py
+# Importing is_asan from github_actions_api.py
 sys.path.append(str(THEROCK_DIR / "build_tools" / "github_actions"))
-from github_actions_utils import get_visible_gpu_count, is_asan
-
-logging.basicConfig(level=logging.INFO)
-
+from github_actions_api import get_visible_gpu_count, is_asan
 
 def main():
     parser = argparse.ArgumentParser(description="Run rocblas tests")
@@ -43,8 +40,8 @@ def main():
     test_type = os.getenv("TEST_TYPE", "full")
 
     if args.multi_gpu:
-        if test_type == "smoke":
-            logging.info("Skipping rocblas multi-GPU tests: smoke test mode")
+        if test_type == "quick":
+            logging.info("Skipping rocblas multi-GPU tests: quick test mode")
             return 0
 
         # Verify we have multiple GPUs available
@@ -59,12 +56,12 @@ def main():
 
         test_filter = ["--gtest_filter=*multi_gpu*"]
     else:
-        # If smoke tests are enabled, we run smoke tests only.
+        # If quick tests are enabled, we run quick tests only.
         # Otherwise, we run the normal test suite
-        if test_type == "smoke":
+        if test_type == "quick":
             test_filter = ["--yaml", f"{THEROCK_BIN_DIR}/rocblas_smoke.yaml"]
         else:
-            # only running smoke tests due to openBLAS issue: https://github.com/ROCm/TheRock/issues/1605
+            # only running quick tests due to openBLAS issue: https://github.com/ROCm/TheRock/issues/1605
             test_filter = ["--yaml", f"{THEROCK_BIN_DIR}/rocblas_smoke.yaml"]
 
     cmd = [f"{THEROCK_BIN_DIR}/rocblas-test"] + test_filter

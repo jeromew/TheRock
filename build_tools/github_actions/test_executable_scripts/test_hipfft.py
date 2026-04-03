@@ -39,8 +39,8 @@ def main():
     test_type = os.getenv("TEST_TYPE", "full")
 
     if args.multi_gpu:
-        if test_type == "smoke":
-            logging.info("Skipping hipfft multi-GPU tests: smoke test mode")
+        if test_type == "quick":
+            logging.info("Skipping hipfft multi-GPU tests: quick test mode")
             return 0
 
         # Verify we have multiple GPUs available
@@ -55,9 +55,9 @@ def main():
 
         test_filter = ["--gtest_filter=*multi_gpu*"]
     else:
-        # If smoke tests are enabled, we run smoke tests only.
+        # If quick tests are enabled, we run quick tests only.
         # Otherwise, we run the normal test suite
-        if test_type == "smoke":
+        if test_type == "quick":
             test_filter = ["--smoketest"]
         else:
             # "--test_prob" is the probability that a given test will run.
